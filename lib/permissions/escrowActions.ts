@@ -67,8 +67,29 @@ const ALLOWED_MILESTONE_STATES: Partial<Record<EscrowOperation, MilestoneState[]
   dispute: ["pending", "approved"],
 }
 
+/**
+ * Single-release pays out the whole escrow at once, so releasing is a property
+ * of every milestone rather than of the one in hand:
+ *
+ *   "Single-release requires ALL milestones approved before any release: you
+ *    cannot call release-funds until every milestone is individually approved.
+ *    Multi-release allows per-milestone releases."
+ *   — .claude/skills/trustless-work-dev/SKILL.md
+ *
+ * The backend's endpoint split says the same thing from the other side:
+ * `release-funds` takes no milestone index for single-release, while
+ * multi-release has `release-milestone-funds`.
+ */
+export type EscrowKind = "single-release" | "multi-release"
+
 export type DenialReason =
-  "no-session" | "unresolved-roles" | "wrong-role" | "wrong-state" | "wrong-milestone-state"
+  | "no-session"
+  | "unresolved-roles"
+  | "wrong-role"
+  | "wrong-state"
+  | "wrong-milestone-state"
+  | "milestones-not-all-approved"
+  | "unknown-escrow-type"
 
 export type ActionDecision =
   { allowed: true } | { allowed: false; reason: DenialReason; requiredRoles?: EscrowRole[] }
@@ -100,7 +121,33 @@ export interface ActionContext {
   roles?: Partial<EscrowRolesInfo> | null
   walletAddress?: string | null
   state?: EscrowLifecycleState
+  /** State of the milestone the action targets. */
   milestoneState?: MilestoneState
+  /** Decides whether releasing is per-milestone or all-or-nothing. */
+  escrowType?: EscrowKind
+  /** Every milestone's state, needed to judge a single-release release. */
+  milestoneStates?: MilestoneState[]
+}
+
+/**
+ * Releasing is the one operation whose rule depends on the escrow type, so it
+ * gets its own check rather than another entry in the state tables.
+ */
+function checkReleaseScope(context: ActionContext): ActionDecision | null {
+  const all = context.milestoneStates
+  // One milestone makes both rules identical, so the type does not matter.
+  if (!all || all.length <= 1) return null
+
+  if (!context.escrowType) {
+    // Guessing picks a bug either way: assume multi-release and we offer a
+    // release the chain rejects, assume single and we hide a valid one.
+    return { allowed: false, reason: "unknown-escrow-type" }
+  }
+  if (context.escrowType === "multi-release") return null
+
+  return all.every((state) => state === "approved" || state === "released")
+    ? null
+    : { allowed: false, reason: "milestones-not-all-approved" }
 }
 
 /**
@@ -152,6 +199,11 @@ export function canPerform(operation: EscrowOperation, context: ActionContext): 
     !milestoneStates.includes(context.milestoneState)
   ) {
     return { allowed: false, reason: "wrong-milestone-state" }
+  }
+
+  if (operation === "releaseFunds") {
+    const scope = checkReleaseScope(context)
+    if (scope) return scope
   }
 
   return checkRole(operation, context.roles, context.walletAddress)

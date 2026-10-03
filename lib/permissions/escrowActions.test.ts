@@ -211,6 +211,94 @@ describe("milestone state", () => {
   })
 })
 
+describe("release scope by escrow type", () => {
+  const base = { roles: ROLES, walletAddress: RELEASER, state: "in_progress" as const }
+
+  it("single-release refuses until every milestone is approved", () => {
+    // From the vendored Trustless Work skill: "Single-release requires ALL
+    // milestones approved before any release." Offering it earlier is a button
+    // the chain rejects.
+    expect(
+      canPerform("releaseFunds", {
+        ...base,
+        escrowType: "single-release",
+        milestoneState: "approved",
+        milestoneStates: ["approved", "pending", "pending"],
+      }),
+    ).toMatchObject({ allowed: false, reason: "milestones-not-all-approved" })
+  })
+
+  it("single-release allows it once they all are", () => {
+    expect(
+      canPerform("releaseFunds", {
+        ...base,
+        escrowType: "single-release",
+        milestoneState: "approved",
+        milestoneStates: ["approved", "approved", "approved"],
+      }).allowed,
+    ).toBe(true)
+  })
+
+  it("multi-release releases the milestone in hand, whatever the others do", () => {
+    expect(
+      canPerform("releaseFunds", {
+        ...base,
+        escrowType: "multi-release",
+        milestoneState: "approved",
+        milestoneStates: ["approved", "pending", "pending"],
+      }).allowed,
+    ).toBe(true)
+  })
+
+  it("refuses when the escrow type is unknown and it would change the answer", () => {
+    expect(
+      canPerform("releaseFunds", {
+        ...base,
+        milestoneState: "approved",
+        milestoneStates: ["approved", "pending"],
+      }),
+    ).toMatchObject({ allowed: false, reason: "unknown-escrow-type" })
+  })
+
+  it("does not need the type when there is only one milestone", () => {
+    // Both rules say the same thing here, so demanding the type would refuse
+    // a release that is plainly valid.
+    expect(
+      canPerform("releaseFunds", {
+        ...base,
+        milestoneState: "approved",
+        milestoneStates: ["approved"],
+      }).allowed,
+    ).toBe(true)
+  })
+
+  it("counts an already released milestone as settled, not as blocking", () => {
+    expect(
+      canPerform("releaseFunds", {
+        ...base,
+        escrowType: "single-release",
+        milestoneState: "approved",
+        milestoneStates: ["released", "approved"],
+      }).allowed,
+    ).toBe(true)
+  })
+
+  it("leaves the other operations untouched by escrow type", () => {
+    for (const operation of ["changeMilestoneStatus", "approveMilestone"] as const) {
+      const wallet = operation === "approveMilestone" ? APPROVER : PROVIDER
+      expect(
+        canPerform(operation, {
+          roles: ROLES,
+          walletAddress: wallet,
+          state: "funded",
+          milestoneState: "pending",
+          milestoneStates: ["pending", "pending"],
+        }).allowed,
+      ).toBe(true)
+    }
+  })
+})
+
 describe("availableOperations", () => {
   it("gives each party exactly its own step of a funded escrow", () => {
     const base = { roles: ROLES, state: "funded" as const, milestoneState: "pending" as const }
