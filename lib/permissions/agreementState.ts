@@ -20,6 +20,13 @@ export interface AgreementLike {
   status?: string | null
   balance?: string | number | null
   amount?: string | number | null
+  /**
+   * Who funded the escrow, when anyone has. Trustless Work marks `balance` as
+   * optional on the indexer responses that back the agreement lists, so an
+   * escrow can come back funded with no balance at all — this field is then
+   * the only evidence that it was.
+   */
+  fundedBy?: string | null
   milestones?: MilestoneLike[]
 }
 
@@ -32,11 +39,22 @@ export function deriveMilestoneState(milestone: MilestoneLike | undefined): Mile
   return "pending"
 }
 
-/** True when the escrow holds at least the agreed amount. */
+/**
+ * True when the escrow holds at least the agreed amount.
+ *
+ * `Number.isFinite` is load-bearing: a missing balance becomes NaN, and every
+ * comparison against NaN is false. Reading that as "not funded" is what made a
+ * funded escrow keep offering the Fund button on every reload.
+ */
 function fundedByBalance(input: AgreementLike): boolean {
   const balance = Number(input.balance)
   const amount = Number(input.amount)
   return Number.isFinite(balance) && Number.isFinite(amount) && amount > 0 && balance >= amount
+}
+
+/** Someone funded it, whatever the balance field says or omits. */
+function hasFunder(input: AgreementLike): boolean {
+  return typeof input.fundedBy === "string" && input.fundedBy.trim().length > 0
 }
 
 const FUNDED_STATUSES = new Set([
@@ -60,7 +78,7 @@ export function deriveLifecycleState(input: AgreementLike): EscrowLifecycleState
   const allReleased = states.length > 0 && states.every((state) => state === "released")
   if (allReleased || status === "completed" || status === "released") return "completed"
 
-  if (FUNDED_STATUSES.has(status ?? "") || fundedByBalance(input)) {
+  if (FUNDED_STATUSES.has(status ?? "") || fundedByBalance(input) || hasFunder(input)) {
     return states.some((state) => state === "approved") ? "in_progress" : "funded"
   }
 

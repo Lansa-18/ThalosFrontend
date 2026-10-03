@@ -18,6 +18,8 @@ type Agreement = {
   milestones: Milestone[]
   receiver: string
   balance?: string
+  /** Set by Trustless Work once anyone funds the escrow. */
+  fundedBy?: string
   serviceProvider?: string
   approver?: string
   releaseSigner?: string
@@ -77,15 +79,18 @@ export function ApproverAgreementDetail({
     status: agr.status,
     balance: agr.balance,
     amount: agr.amount,
+    fundedBy: agr.fundedBy,
     milestones: localMilestones,
   })
   const allReleased = agr.released
   const someApproved = localMilestones.some((m) => m.approved === true || m.status === "approved")
   const completedMs = localMilestones.filter((m) => m.status === "released").length
   const progressPct = localMilestones.length > 0 ? (completedMs / localMilestones.length) * 100 : 0
-  const amountNum = Number(agr.amount)
-  const balanceNum = Number(agr.balance)
-  const isFunded = fundSuccess || balanceNum >= amountNum
+  // Derived, not compared: `balance` is optional on Trustless Work's list
+  // responses, and `Number(undefined) >= amount` is false, so a funded escrow
+  // with no balance kept offering the Fund button on every reload. The badge
+  // already read the derived state, which is why the two disagreed on screen.
+  const isFunded = fundSuccess || ["funded", "in_progress", "completed"].includes(lifecycleState)
   const disableFund = funding || isFunded
   const { t } = useLanguage()
 

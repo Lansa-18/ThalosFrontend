@@ -358,6 +358,8 @@ interface TrustlessEscrow {
   balance?: string
   createdAt?: { _seconds?: number }
   flags?: { released?: boolean }
+  /** Set once anyone funds the escrow; `balance` is optional on this response. */
+  fundedBy?: string
   roles?: {
     serviceProvider?: string
     receiver?: string
@@ -394,12 +396,18 @@ function mapEscrowToApproverAgreement(escrow: TrustlessEscrow) {
   const allUnapproved = milestones.length > 0 && milestones.every((m) => m.approved === false)
   const balanceNum = Number(escrow.balance)
   const amountNum = Number(amount)
+  // Only judge by balance when there is one. Trustless Work marks it optional
+  // here, and every comparison against NaN is false, so an unknown balance
+  // used to fall through to the initial "funded" while the detail view read
+  // the same NaN as "not funded" — the two then disagreed on screen.
+  const balanceKnown = Number.isFinite(balanceNum) && Number.isFinite(amountNum) && amountNum > 0
+  const funded = balanceKnown ? balanceNum >= amountNum : Boolean(escrow.fundedBy)
   let status = "funded"
   if (escrow.flags?.released) {
     status = "released"
-  } else if (anyUnapproved && balanceNum < amountNum) {
+  } else if (anyUnapproved && !funded) {
     status = "pending"
-  } else if (allUnapproved && balanceNum >= amountNum) {
+  } else if (allUnapproved && funded) {
     status = "funded"
   }
 
@@ -434,6 +442,7 @@ function mapEscrowToApproverAgreement(escrow: TrustlessEscrow) {
     })),
     receiver: escrow.roles?.receiver || escrow.roles?.serviceProvider || "-",
     balance: escrow.balance,
+    fundedBy: escrow.fundedBy,
     serviceProvider: escrow.roles?.serviceProvider || "-",
     approver: escrow.roles?.approver,
     releaseSigner: escrow.roles?.releaseSigner,
