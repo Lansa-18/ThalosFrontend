@@ -82,6 +82,52 @@ describe("deriveLifecycleState", () => {
     ).toBe("waiting_for_funding")
   })
 
+  it("stays funded when the balance is absent but someone funded it", () => {
+    // The reported bug. Trustless Work marks `balance` optional on the list
+    // responses, so a funded escrow comes back without one; `Number(undefined)`
+    // is NaN and every comparison against it is false, which read as "not
+    // funded" and made the dashboard offer the Fund button again on reload.
+    expect(
+      deriveLifecycleState({
+        status: "pending",
+        amount: "100",
+        fundedBy: "GFUNDER",
+        milestones: [{ status: "pending" }],
+      }),
+    ).toBe("funded")
+  })
+
+  it("is still waiting_for_funding when nothing says it was funded", () => {
+    expect(
+      deriveLifecycleState({
+        status: "pending",
+        amount: "100",
+        milestones: [{ status: "pending" }],
+      }),
+    ).toBe("waiting_for_funding")
+  })
+
+  it("ignores a blank funder", () => {
+    for (const fundedBy of ["", "   ", null, undefined]) {
+      expect(
+        deriveLifecycleState({
+          status: "pending",
+          amount: "100",
+          fundedBy,
+          milestones: [{ status: "pending" }],
+        }),
+      ).toBe("waiting_for_funding")
+    }
+  })
+
+  it("never lets a missing balance decide on its own", () => {
+    // NaN comparisons are false in both directions, so neither "funded" nor
+    // "not funded" may be concluded from an absent balance.
+    const noBalance = { status: "pending", amount: "100", milestones: [{ status: "pending" }] }
+    expect(deriveLifecycleState(noBalance)).toBe("waiting_for_funding")
+    expect(deriveLifecycleState({ ...noBalance, fundedBy: "GFUNDER" })).toBe("funded")
+  })
+
   it("moves to in_progress once a milestone is approved", () => {
     expect(
       deriveLifecycleState({
