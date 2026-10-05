@@ -37,6 +37,11 @@ export function isFundedEscrow(
     return balance >= amount
   }
 
-  // No usable balance: the funder is the remaining evidence.
+  // No usable balance: the funder is the only remaining evidence.
+  //
+  // A capture from testnet on 2026-10-05 carried `balance` on all eight escrows
+  // and `fundedBy` on none, so in practice this branch does not run — the field
+  // is documented but not sent. It stays as a cheap guard for the shape the
+  // documentation promises, and nothing is built on it.
   return typeof escrow.fundedBy === "string" && escrow.fundedBy.trim().length > 0
 }

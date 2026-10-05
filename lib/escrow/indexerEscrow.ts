@@ -97,6 +97,26 @@ function numericString(
   return undefined
 }
 
+/**
+ * Trustless Work sends a Firestore timestamp — `{ _seconds }` — not the ISO
+ * string its own type declares. Reading it as a string silently yields nothing,
+ * and every agreement then renders with today's date.
+ */
+function parseCreatedAt(value: unknown, issues: EscrowShapeIssue[]): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "string") return value
+  if (isRecord(value) && typeof value._seconds === "number") {
+    return new Date(value._seconds * 1000).toISOString()
+  }
+  issues.push({
+    kind: "wrong-type",
+    field: "createdAt",
+    expected: "string | { _seconds: number }",
+    got: typeOf(value),
+  })
+  return undefined
+}
+
 function parseMilestones(raw: unknown, issues: EscrowShapeIssue[]): NormalizedMilestone[] {
   if (raw === undefined) {
     issues.push({ kind: "missing", field: "milestones" })
@@ -204,7 +224,7 @@ export function parseIndexerEscrow(raw: unknown): ParseResult {
         released: flags?.released === true,
         resolved: flags?.resolved === true,
       },
-      createdAt: typeof raw.createdAt === "string" ? raw.createdAt : undefined,
+      createdAt: parseCreatedAt(raw.createdAt, issues),
     },
     issues,
   }
