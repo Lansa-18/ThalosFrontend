@@ -2,6 +2,7 @@
 
 import { ApproverAgreementDetail } from "./ApproverAgreementDetail"
 import { findApproverEscrow } from "@/lib/helpers/approverEscrow"
+import { AgreementsSkeleton } from "@/components/dashboard/agreements-skeleton"
 import {
   parseIndexerEscrows,
   reportEscrowShapeIssues,
@@ -159,6 +160,11 @@ function FormInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
+        // A numeric field has nothing the browser's saved addresses or emails
+        // can usefully fill, and offering them drops a suggestion list over the
+        // rest of the form. `inputMode` also gets a phone keypad on mobile.
+        autoComplete={type === "number" ? "off" : undefined}
+        inputMode={type === "number" ? "decimal" : undefined}
         className={cn(
           "h-12 w-full rounded-xl border border-border/40 bg-card/30 px-4 text-sm text-foreground placeholder:text-muted-foreground/40 focus:border-[#f0b400]/50 focus:outline-none focus:ring-2 focus:ring-[#f0b400]/15 transition-all duration-200",
           disabled && "opacity-50 cursor-not-allowed",
@@ -2521,10 +2527,10 @@ export default function PersonalDashboardPage() {
                 </div>
               )}
 
-              {agreementsLoading ? (
-                <div className="flex items-center justify-center py-16 text-sm text-white/40">
-                  Loading agreements...
-                </div>
+              {/* Both reads gate the list: the on-chain escrows used to arrive
+                  into a list already on screen, so the section counts jumped. */}
+              {agreementsLoading || approverLoading ? (
+                <AgreementsSkeleton />
               ) : (
                 /* Agreements view — pre-filtered by selected wallet when active */
                 <AgreementsView
@@ -3383,6 +3389,8 @@ export default function PersonalDashboardPage() {
                                     onChange={(e) => updateMilestone(i, "amount", e.target.value)}
                                     placeholder={t("wizard.amount")}
                                     type="number"
+                                    autoComplete="off"
+                                    inputMode="decimal"
                                     className="w-28 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm text-white placeholder:text-white/15 focus:border-[#f0b400]/40 focus:outline-none"
                                   />
                                   {milestones.length > 1 && (
