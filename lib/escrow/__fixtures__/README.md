@@ -35,12 +35,29 @@ records, and an address that only ever held testnet funds is not a secret. If a
 capture ever comes from mainnet, redact the addresses — the shape is what
 matters, not whose escrow it was.
 
-| Fixture            | Source                               | Captured |
-| ------------------ | ------------------------------------ | -------- |
-| `indexerEscrow.ts` | skill docs, single-release-escrow.md | —        |
+| Fixture                 | Source                                               | Captured   |
+| ----------------------- | ---------------------------------------------------- | ---------- |
+| `indexerEscrow.ts`      | skill docs, single-release-escrow.md                 | —          |
+| `captured-by-role.json` | `GET /escrows/by-role?role=platformAddress`, testnet | 2026-10-05 |
 
 ## What belongs here
 
 Payloads **as Trustless Work returns them**: nested `roles`, optional `balance`,
 `flags` as an object. Not our view models. The parser's job is to turn the first
 into the second, and a fixture written in our own shape would test nothing.
+
+## What the first capture settled
+
+The documentation and the API disagree in three places, all found the moment a
+real response was run through the parser:
+
+- `fundedBy` is documented on the indexer response and was absent from all eight
+  escrows returned. Nothing may depend on it.
+- `balance` is documented optional and was present on all eight, including as
+  `0` for escrows nobody funded. An absent balance is not how an unfunded escrow
+  is reported.
+- `createdAt` is documented as a `Date` and arrives as a Firestore timestamp,
+  `{ _seconds }`. Read as a string it yields nothing, and every agreement then
+  renders with today's date.
+
+This is the argument for capturing rather than transcribing, in three lines.
