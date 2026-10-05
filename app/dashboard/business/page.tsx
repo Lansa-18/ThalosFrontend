@@ -1,6 +1,8 @@
 "use client"
 
 import React, { useState, useEffect, useCallback, useId, useRef, useMemo } from "react"
+import { ApproverAgreementDetail } from "../personal/ApproverAgreementDetail"
+import { findApproverEscrow } from "@/lib/helpers/approverEscrow"
 import Image from "next/image"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -315,6 +317,13 @@ interface Agreement {
   role?: "buyer" | "seller"
   serviceProvider?: string
   client?: string
+  /** On-chain roles and balance, present only on escrows read by role. */
+  approver?: string
+  releaseSigner?: string
+  disputeResolver?: string
+  balance?: string
+  fundedBy?: string
+  released?: boolean
 }
 
 const initialAgreements: Agreement[] = []
@@ -937,6 +946,7 @@ export default function BusinessDashboardPage() {
   } | null>(null)
   const [approverEscrows, setApproverEscrows] = useState<Agreement[]>([])
   const [approverLoading, setApproverLoading] = useState(false)
+  const [escrowRefreshNonce, setEscrowRefreshNonce] = useState(0)
 
   // Fetch wallets with agreements
   useEffect(() => {
@@ -976,10 +986,9 @@ export default function BusinessDashboardPage() {
     return {
       id: (e.contractId as string) || `escrow-${Date.now()}`,
       title: (e.title as string) || "Escrow Agreement",
-      counterparty:
-        (e.serviceProvider as string) || (e.receiver as string)
-          ? ((e.serviceProvider as string) || (e.receiver as string)).slice(0, 8) + "..."
-          : "-",
+      counterparty: e.roles?.serviceProvider
+        ? (e.roles.serviceProvider as string).slice(0, 8) + "..."
+        : "-",
       status: (e.status as string) || "pending",
       amount,
       currency: "USDC",
@@ -994,9 +1003,15 @@ export default function BusinessDashboardPage() {
             ? "approved"
             : ("pending" as "pending" | "approved" | "released"),
       })),
-      receiver: (e.receiver as string) || "-",
-      serviceProvider: (e.serviceProvider as string) || "-",
-      role: currentWorkspaceWallet === e.serviceProvider ? "seller" : "buyer",
+      receiver: (e.roles?.receiver as string) || (e.roles?.serviceProvider as string) || "-",
+      serviceProvider: (e.roles?.serviceProvider as string) || "-",
+      approver: e.roles?.approver as string | undefined,
+      releaseSigner: e.roles?.releaseSigner as string | undefined,
+      disputeResolver: e.roles?.disputeResolver as string | undefined,
+      balance: e.balance as string | undefined,
+      fundedBy: e.fundedBy as string | undefined,
+      released: Boolean(e.flags?.released),
+      role: currentWorkspaceWallet === e.roles?.serviceProvider ? "seller" : "buyer",
     }
   }
 
@@ -1007,7 +1022,7 @@ export default function BusinessDashboardPage() {
     const workspaceWallet: string = currentWorkspaceWallet
     // Include the token so we re-fetch once auth loads. The escrow reads are
     // public, so this only upgrades an anonymous read to an authenticated one.
-    const fetchKey = `${workspaceWallet}::${token ?? ""}`
+    const fetchKey = `${workspaceWallet}::${token ?? ""}::${escrowRefreshNonce}`
     if (fetchedEscrowsRef.current === fetchKey) return
     fetchedEscrowsRef.current = fetchKey
 
@@ -1029,7 +1044,7 @@ export default function BusinessDashboardPage() {
     }
 
     fetchAgreements()
-  }, [currentWorkspaceWallet, token])
+  }, [currentWorkspaceWallet, token, escrowRefreshNonce])
 
   // Fetch approver escrows (for approver tab)
   useEffect(() => {
@@ -1053,7 +1068,13 @@ export default function BusinessDashboardPage() {
       setApproverLoading(false)
     }
     fetchApproverEscrows()
-  }, [currentWorkspaceWallet, token])
+  }, [currentWorkspaceWallet, token, escrowRefreshNonce])
+
+  /**
+   * Re-read agreements and escrows. Funding, approving, releasing and disputing
+   * all change on-chain state the cached read cannot know about.
+   */
+  const refreshEscrows = useCallback(() => setEscrowRefreshNonce((n) => n + 1), [])
 
   // Fetch team members when activeSection is 'team'
   useEffect(() => {
@@ -2239,6 +2260,43 @@ export default function BusinessDashboardPage() {
                 !isActiveSectionKybGated &&
                 viewingAgreement &&
                 (() => {
+                  // Escrows read on-chain by role carry the roles and balance the
+                  // approver actions need; the Nest list does not. Without this the
+                  // detail resolved nothing for them, and funding — whose only entry
+                  // point is ApproverAgreementDetail — was unreachable here.
+                  const approverEscrow = findApproverEscrow(
+                    approverEscrows,
+                    viewingAgreement,
+                    currentWorkspaceWallet,
+                  )
+                  if (approverEscrow && currentWorkspaceWallet) {
+                    return (
+                      <div className="mx-auto max-w-4xl">
+                        <button
+                          onClick={() => setViewingAgreement(null)}
+                          className="mb-6 flex items-center gap-2 text-sm text-white/40 transition-colors hover:text-white"
+                        >
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <polyline points="15 18 9 12 15 6" />
+                          </svg>
+                          Back to Agreements
+                        </button>
+                        <ApproverAgreementDetail
+                          agr={approverEscrow}
+                          walletAddress={currentWorkspaceWallet}
+                          onEscrowChanged={refreshEscrows}
+                        />
+                      </div>
+                    )
+                  }
+
                   const agr = agreements.find((a) => a.id === viewingAgreement)
                   if (!agr) return null
                   const allReleased = agr.milestones.every((m) => m.status === "released")
