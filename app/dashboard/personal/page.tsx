@@ -2,6 +2,13 @@
 
 import { ApproverAgreementDetail } from "./ApproverAgreementDetail"
 import { findApproverEscrow } from "@/lib/helpers/approverEscrow"
+import {
+  parseIndexerEscrows,
+  reportEscrowShapeIssues,
+  type NormalizedEscrow,
+} from "@/lib/escrow/indexerEscrow"
+import { isFundedEscrow } from "@/lib/escrow/fundingState"
+import { safeMapStatus, twMilestoneStatus } from "@/lib/types/status"
 import { canSubmitEvidence } from "@/lib/helpers/evidencePermission"
 import React, { useState, useEffect, useCallback, useId, useRef, useMemo } from "react"
 import Image from "next/image"
@@ -350,61 +357,23 @@ function mapNestAgreementToUi(
 // The approver tab still reads live TW escrow state (not Nest agreements): approving
 // a milestone is an on-chain action that needs the escrow's current approved/released
 // flags and roles, which the Nest listing does not carry.
-interface TrustlessEscrow {
-  contractId: string
-  title?: string
-  type?: string
-  amount?: number | string
-  balance?: string
-  createdAt?: { _seconds?: number }
-  flags?: { released?: boolean }
-  /** Set once anyone funds the escrow; `balance` is optional on this response. */
-  fundedBy?: string
-  roles?: {
-    serviceProvider?: string
-    receiver?: string
-    approver?: string
-    releaseSigner?: string
-    disputeResolver?: string
-  }
-  milestones?: Array<{
-    approved?: boolean
-    description?: string
-    amount?: number | string
-    status?: MilestoneStatus
-    evidence?: string
-    flags?: { released?: boolean; approved?: boolean }
-  }>
-}
 
-// Raw Trustless Work payload: camelCase and carrying on-chain flags, so it is
-// not the snake_case `Escrow` from lib/api/escrow.
+// The payload is already parsed by lib/escrow/indexerEscrow, which is where
+// Trustless Work's shape is dealt with. This only turns it into the view model
+// the dashboard renders.
 type ApproverEscrow = ReturnType<typeof mapEscrowToApproverAgreement>
 
-function mapEscrowToApproverAgreement(escrow: TrustlessEscrow) {
-  const isMulti = escrow.type === "multi-release"
-  const amount = isMulti
-    ? (escrow.milestones || [])
-        .reduce((sum, m) => sum + (typeof m.amount === "number" ? m.amount : 0), 0)
-        .toString()
-    : escrow.amount
-      ? escrow.amount.toString()
-      : ""
+function mapEscrowToApproverAgreement(escrow: NormalizedEscrow) {
+  const isMulti = escrow.escrowType === "multi-release"
+  const funded = isFundedEscrow(escrow)
+  const anyUnapproved = escrow.milestones.some((m) => !m.approved)
+  const allUnapproved = escrow.milestones.length > 0 && escrow.milestones.every((m) => !m.approved)
 
-  const milestones = escrow.milestones || []
-  const anyUnapproved = milestones.some((m) => m.approved === false)
-  const allUnapproved = milestones.length > 0 && milestones.every((m) => m.approved === false)
-  const balanceNum = Number(escrow.balance)
-  const amountNum = Number(amount)
-  // Only judge by balance when there is one. Trustless Work marks it optional
-  // here, and every comparison against NaN is false, so an unknown balance
-  // used to fall through to the initial "funded" while the detail view read
-  // the same NaN as "not funded" — the two then disagreed on screen.
-  const balanceKnown = Number.isFinite(balanceNum) && Number.isFinite(amountNum) && amountNum > 0
-  const funded = balanceKnown ? balanceNum >= amountNum : Boolean(escrow.fundedBy)
   let status = "funded"
-  if (escrow.flags?.released) {
+  if (escrow.flags.released) {
     status = "released"
+  } else if (escrow.flags.disputed) {
+    status = "disputed"
   } else if (anyUnapproved && !funded) {
     status = "pending"
   } else if (allUnapproved && funded) {
@@ -413,41 +382,36 @@ function mapEscrowToApproverAgreement(escrow: TrustlessEscrow) {
 
   return {
     id: escrow.contractId,
-    title: escrow.title ?? "-",
+    title: escrow.title || "-",
     status,
     type: (isMulti ? "Multi Release" : "Single Release") as Agreement["type"],
-    counterparty: escrow.roles?.serviceProvider
+    counterparty: escrow.roles.serviceProvider
       ? `${escrow.roles.serviceProvider.slice(0, 8)}...`
       : "-",
-    amount,
+    amount: escrow.amount,
     currency: "USDC",
-    date: escrow.createdAt?._seconds
-      ? new Date(escrow.createdAt._seconds * 1000).toISOString().split("T")[0]
-      : new Date().toISOString().split("T")[0],
-    milestones: milestones.map((m) => ({
+    date: (escrow.createdAt ?? new Date().toISOString()).split("T")[0],
+    milestones: escrow.milestones.map((m) => ({
       approved: m.approved,
-      description: m.description ?? "",
-      amount:
-        typeof m.amount === "number" && m.amount !== undefined
-          ? m.amount.toString()
-          : !isMulti && escrow.amount
-            ? escrow.amount.toString()
-            : "",
-      status: m.flags?.released
-        ? "released"
-        : m.flags?.approved
-          ? "approved"
-          : m.status || "pending",
+      description: m.description,
+      amount: m.amount ?? (!isMulti ? escrow.amount : ""),
+      // Through the canonical mapper: Trustless Work also says "completed" for
+      // released, and an unknown status must not silently become "pending".
+      status: m.released
+        ? ("released" as MilestoneStatus)
+        : m.approved
+          ? ("approved" as MilestoneStatus)
+          : safeMapStatus(m.status, twMilestoneStatus, "pending"),
       evidence: m.evidence,
     })),
-    receiver: escrow.roles?.receiver || escrow.roles?.serviceProvider || "-",
+    receiver: escrow.roles.receiver || "-",
     balance: escrow.balance,
     fundedBy: escrow.fundedBy,
-    serviceProvider: escrow.roles?.serviceProvider || "-",
-    approver: escrow.roles?.approver,
-    releaseSigner: escrow.roles?.releaseSigner,
-    disputeResolver: escrow.roles?.disputeResolver,
-    released: escrow.flags?.released ?? false,
+    serviceProvider: escrow.roles.serviceProvider || "-",
+    approver: escrow.roles.approver,
+    releaseSigner: escrow.roles.releaseSigner,
+    disputeResolver: escrow.roles.disputeResolver,
+    released: escrow.flags.released,
     role: "buyer" as const,
   }
 }
@@ -1318,7 +1282,11 @@ export default function PersonalDashboardPage() {
         token ?? undefined,
       )
       if (res.success && Array.isArray(res.data)) {
-        setApproverEscrows((res.data as TrustlessEscrow[]).map(mapEscrowToApproverAgreement))
+        // Parsed at the boundary so a shape change says so, instead of arriving
+        // as an escrow with no roles that nobody can act on.
+        const { escrows, issues } = parseIndexerEscrows(res.data)
+        reportEscrowShapeIssues("escrows/by-role", issues)
+        setApproverEscrows(escrows.map(mapEscrowToApproverAgreement))
       } else {
         setApproverEscrows([])
       }
